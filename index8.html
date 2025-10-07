@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Pixel Maze Runner — Sleep Lesson</title>
+<style>
+  :root{
+    --bg:#071022;
+    --panel:rgba(0,0,0,0.6);
+    --accent:#6ee7b7;
+  }
+  html,body{
+    height:100%;margin:0;
+    font-family:system-ui,-apple-system,'Segoe UI',Roboto,monospace;
+    background:linear-gradient(180deg,#061022 0%,#07132a 100%);
+    color:#e6eef6;
+    overflow:hidden;
+  }
+  .center{display:flex;align-items:center;justify-content:center;height:100%}
+  #ui{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .card{background:var(--panel);border:2px solid rgba(255,255,255,0.06);backdrop-filter:blur(6px);padding:18px;border-radius:12px;pointer-events:auto;text-align:center}
+  button{cursor:pointer;background:var(--accent);border:none;padding:10px 14px;border-radius:8px;font-weight:700}
+  canvas{image-rendering:pixelated;border:10px solid #041023;background:#071022;box-shadow:0 8px 30px rgba(0,0,0,0.6)}
+  .small{font-size:12px;opacity:0.95}
+  .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .lesson{max-width:720px;white-space:pre-wrap}
+  .hud{display:flex;gap:8px}
+  .muted{opacity:0.8;font-size:13px}
+
+  /* --- Touchscreen arrows --- */
+  #mobileControls {
+    position: absolute;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 60px;
+    pointer-events: none;
+  }
+  .control-set {
+    display: grid;
+    grid-template-columns: repeat(3, 60px);
+    grid-template-rows: repeat(2, 60px);
+    justify-items: center;
+    align-items: center;
+  }
+  .arrow-btn {
+    width: 60px; height: 60px;
+    background: rgba(255,255,255,0.08);
+    border: 2px solid rgba(255,255,255,0.2);
+    border-radius: 10px;
+    font-size: 28px;
+    color: white;
+    text-align: center;
+    line-height: 60px;
+    user-select: none;
+    pointer-events: auto;
+    transition: background 0.2s;
+  }
+  .arrow-btn:active { background: rgba(255,255,255,0.25); }
+  .arrow-empty { opacity:0; pointer-events:none; }
+</style>
+</head>
+<body>
+  <div id="ui">
+    <div id="intro" class="card">
+      <h1>PIXEL MAZE RUNNER</h1>
+      <p class="small">Escape 5 pixel mazes while chased by sleepy monsters. Finish each level to unlock the next and read a moral lesson about sleep deprivation.</p>
+      <div style="margin-top:12px"><button id="startBtn">Start Game</button></div>
+      <p class="small muted" style="margin-top:8px">Use Arrow keys or WASD — or touch arrows below for mobile play.</p>
+    </div>
+  </div>
+
+  <div class="center" id="gameArea" style="display:none;flex-direction:column;gap:10px;">
+    <canvas id="gameCanvas"></canvas>
+    <div style="display:flex;gap:12px;align-items:center">
+      <div class="card small hud">Level: <strong id="levelLabel" style="margin:0 6px">1</strong>/5</div>
+      <div class="card small hud">Chaser: <span id="monsterLabel">-</span></div>
+      <div class="card small hud">Status: <span id="statusLabel">Ready</span></div>
+      <div class="card small hud">Lives: <span id="livesLabel">3</span></div>
+    </div>
+  </div>
+
+  <div id="overlay" class="overlay" style="display:none;">
+    <div class="card lesson">
+      <h2 id="overlayTitle">Lesson</h2>
+      <p id="overlayText"></p>
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+        <button id="nextBtn">Next Level</button>
+        <button id="restartBtn">Restart Game</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mobile Touch Controls -->
+  <div id="mobileControls" style="display:none;">
+    <div class="control-set">
+      <div class="arrow-empty"></div>
+      <div class="arrow-btn" id="btnUp">▲</div>
+      <div class="arrow-empty"></div>
+      <div class="arrow-btn" id="btnLeft">◀</div>
+      <div class="arrow-btn" id="btnDown">▼</div>
+      <div class="arrow-btn" id="btnRight">▶</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const TILE=16,COLS=32,ROWS=24,SCALE=2,MOVE_INTERVAL=110,START_LIVES=3;
+  const canvas=document.getElementById('gameCanvas'),ctx=canvas.getContext('2d');
+  const startBtn=document.getElementById('startBtn'),intro=document.getElementById('intro'),gameArea=document.getElementById('gameArea'),
+        levelLabel=document.getElementById('levelLabel'),monsterLabel=document.getElementById('monsterLabel'),
+        statusLabel=document.getElementById('statusLabel'),livesLabel=document.getElementById('livesLabel'),
+        overlay=document.getElementById('overlay'),overlayTitle=document.getElementById('overlayTitle'),
+        overlayText=document.getElementById('overlayText'),nextBtn=document.getElementById('nextBtn'),restartBtn=document.getElementById('restartBtn');
+  canvas.width=TILE*COLS;canvas.height=TILE*ROWS;
+  canvas.style.width=(canvas.width*SCALE)+'px';canvas.style.height=(canvas.height*SCALE)+'px';
+
+  const player={x:1,y:1,dir:1,frame:0,frameTimer:0,lives:START_LIVES};
+  const monsterDefs=[
+    {name:'Nod',color:'#ef4444',baseSpeed:.6,lesson:'Short-term sleep loss reduces reaction speed and alertness.'},
+    {name:'Zar',color:'#f97316',baseSpeed:.66,lesson:'Missing sleep makes focus and decision-making worse.'},
+    {name:'Murk',color:'#eab308',baseSpeed:.7,lesson:'Chronic sleep deprivation harms memory formation.'},
+    {name:'Gloom',color:'#7c3aed',baseSpeed:.74,lesson:'Long-term lack of sleep increases accident risk.'},
+    {name:'Vast',color:'#06b6d4',baseSpeed:.8,lesson:'Sleep is the brain and body\'s recovery time.'}
+  ];
+
+  function createBomberGrid(seedIndex=0){
+    const g=Array.from({length:ROWS},()=>Array(COLS).fill(0));
+    for(let r=0;r<ROWS;r++)g[r][0]=g[r][COLS-1]=1;
+    for(let c=0;c<COLS;c++)g[0][c]=g[ROWS-1][c]=1;
+    for(let r=2;r<ROWS-2;r+=2)for(let c=2;c<COLS-2;c+=2)g[r][c]=1;
+    const baseChance=.12+seedIndex*.01;
+    for(let r=1;r<ROWS-1;r++)for(let c=1;c<COLS-1;c++)
+      if(g[r][c]==0&&Math.random()<baseChance)if(!((r<3&&c<4)||(r>ROWS-4&&c>COLS-5)))g[r][c]=4;
+    g[1][1]=2;g[ROWS-2][COLS-2]=3;return g;
+  }
+
+  const levels=[0,1,2,3,4].map(i=>createBomberGrid(i));let curLevel=0;let grid=levels[curLevel];
+  let monster={x:COLS-3,y:ROWS-3,speed:monsterDefs[0].baseSpeed-.08,color:monsterDefs[0].color,name:monsterDefs[0].name};
+  const keys={};window.addEventListener('keydown',e=>keys[e.key]=true);window.addEventListener('keyup',e=>keys[e.key]=false);
+
+  function findTile(v){for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++)if(grid[r][c]==v)return{x:c,y:r};return null;}
+  function setLevel(n){curLevel=n;grid=levels[curLevel];
+    const s=findTile(2)||{x:1,y:1};player.x=s.x;player.y=s.y;
+    const f=findTile(3)||{x:COLS-2,y:ROWS-2};monster.x=Math.max(2,f.x-1);monster.y=Math.max(2,f.y-1);
+    monster.speed=Math.max(.05,monsterDefs[curLevel].baseSpeed-.08);
+    monster.color=monsterDefs[curLevel].color;monster.name=monsterDefs[curLevel].name;
+    levelLabel.textContent=curLevel+1;monsterLabel.textContent=monster.name;
+    statusLabel.textContent='Running';nextBtn.disabled=true;livesLabel.textContent=player.lives;
+  }
+  function canStep(x,y){return x>=0&&y>=0&&x<COLS&&y<ROWS&&(grid[y][x]==0||grid[y][x]==2||grid[y][x]==3);}
+  function stepPlayer(){let dx=0,dy=0;if(keys['ArrowUp']||keys['w'])dy=-1;if(keys['ArrowDown']||keys['s'])dy=1;if(keys['ArrowLeft']||keys['a'])dx=-1;if(keys['ArrowRight']||keys['d'])dx=1;
+    if(dx!=0&&dy!=0)dy=0;if(dx||dy){const nx=player.x+dx,ny=player.y+dy;if(canStep(nx,ny)){player.x=nx;player.y=ny;}player.dir=dx<0?-1:dx>0?1:player.dir;}}
+  function bfsNext(sx,sy,tx,ty){const q=[],v=Array.from({length:ROWS},()=>Array(COLS).fill(false));q.push({x:sx,y:sy,from:null});v[sy][sx]=true;let f=null;
+    for(let i=0;i<q.length;i++){const c=q[i];if(c.x==tx&&c.y==ty){f=c;break;}for(const d of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=c.x+d[0],ny=c.y+d[1];
+      if(nx>=0&&ny>=0&&nx<COLS&&ny<ROWS&&!v[ny][nx]&&grid[ny][nx]!=1&&grid[ny][nx]!=4){v[ny][nx]=true;q.push({x:nx,y:ny,from:c});}}}
+    if(!f)return null;let c=f;while(c.from&&c.from.from)c=c.from;return{x:c.x,y:c.y};}
+  function stepMonster(){const n=bfsNext(monster.x,monster.y,player.x,player.y);if(!n)return;if(Math.random()<monster.speed){monster.x=n.x;monster.y=n.y;}}
+
+  // 🎨 Draw with improved pixel graphics
+  function drawGrid(){
+    ctx.fillStyle='#071122';ctx.fillRect(0,0,canvas.width,canvas.height);
+    for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++){
+      const v=grid[r][c],px=c*TILE,py=r*TILE;
+      if(v==1){
+        // wall texture
+        const g=ctx.createLinearGradient(px,py,px+TILE,py+TILE);
+        g.addColorStop(0,'#1a2a3a');g.addColorStop(1,'#243b55');
+        ctx.fillStyle=g;ctx.fillRect(px,py,TILE,TILE);
+        ctx.fillStyle='rgba(255,255,255,0.05)';
+        ctx.fillRect(px+3,py+3,2,2);
+      } else if(v==4){
+        ctx.fillStyle='#5a3e2b';
+        ctx.fillRect(px,py,TILE,TILE);
+        ctx.fillStyle='rgba(0,0,0,0.2)';
+        ctx.fillRect(px+1,py+1,14,14);
+      } else if(v==2){
+        const g=ctx.createRadialGradient(px+8,py+8,2,px+8,py+8,8);
+        g.addColorStop(0,'#00ffa8');g.addColorStop(1,'#04695e');
+        ctx.fillStyle=g;ctx.fillRect(px,py,TILE,TILE);
+      } else if(v==3){
+        const g=ctx.createLinearGradient(px,py,px,py+TILE);
+        g.addColorStop(0,'#fff36b');g.addColorStop(1,'#d6a900');
+        ctx.fillStyle=g;ctx.fillRect(px,py,TILE,TILE);
+      }
+    }
+  }
+
+  
+  function drawPlayer() {
+  const px = player.x * TILE;
+  const py = player.y * TILE;
+
+  // Animate squish/stretch effect
+  const t = Date.now() / 180;
+  const squishY = 1 - Math.abs(Math.sin(t) * 0.15);
+  const stretchX = 1 + Math.abs(Math.sin(t) * 0.1);
+
+  ctx.save();
+  ctx.translate(px + TILE / 2, py + TILE / 2);
+  ctx.scale(stretchX, squishY);
+
+  // 💧 Slime body (pixel-glue style)
+  const gradient = ctx.createRadialGradient(0, 0, 2, 0, 0, 8);
+  gradient.addColorStop(0, '#aafaff');
+  gradient.addColorStop(0.5, '#62d0ff');
+  gradient.addColorStop(1, '#1b5faa');
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 7, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Subtle shine on top-left
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.beginPath();
+  ctx.arc(-2, -3, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 👀 Cute eyes
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(-2, -1, 1.5, 0, Math.PI * 2);
+  ctx.arc(2, -1, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // pupils
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(-2, -1, 0.6, 0, Math.PI * 2);
+  ctx.arc(2, -1, 0.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // tiny mouth
+  ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(-2, 2);
+  ctx.lineTo(2, 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+
+function stepPlayer() {
+  let dx = 0, dy = 0;
+  if (keys['ArrowUp'] || keys['w']) dy = -1;
+  if (keys['ArrowDown'] || keys['s']) dy = 1;
+  if (keys['ArrowLeft'] || keys['a']) dx = -1;
+  if (keys['ArrowRight'] || keys['d']) dx = 1;
+
+  if (dx != 0 && dy != 0) dy = 0;
+  const moving = dx !== 0 || dy !== 0;
+
+  if (moving) {
+    const nx = player.x + dx, ny = player.y + dy;
+    if (canStep(nx, ny)) {
+      player.x = nx;
+      player.y = ny;
+      player.frameTimer += 1;
+    }
+    player.dir = dx < 0 ? -1 : dx > 0 ? 1 : player.dir;
+  } else {
+    player.frameTimer = 0;
+  }
+}
+
+
+  function drawMonster(){
+    const px=monster.x*TILE,py=monster.y*TILE;
+    const g=ctx.createRadialGradient(px+8,py+8,3,px+8,py+8,8);
+    g.addColorStop(0,monster.color);g.addColorStop(1,'#000');
+    ctx.fillStyle=g;ctx.fillRect(px,py,TILE,TILE);
+  }
+
+  function render(){drawGrid();drawPlayer();drawMonster();}
+  function checkFinish(){const f=findTile(3);return f&&player.x==f.x&&player.y==f.y;}
+  function checkCaught(){return player.x==monster.x&&player.y==monster.y;}
+  function showLessonAndPause(){const d=monsterDefs[curLevel];overlayTitle.textContent='Lesson — '+monster.name;
+    overlayText.textContent=d.lesson+'\n\nTakeaway: Prioritize rest — your brain repairs itself during deep sleep, improving focus and creativity.';overlay.style.display='flex';nextBtn.disabled=false;}
+  function showGameOverOverlay(){overlayTitle.textContent='Game Over';overlayText.textContent='You ran out of lives.';overlay.style.display='flex';nextBtn.disabled=true;}
+
+  let last=performance.now(),acc=0,running=false;
+  function tick(now){if(!running)return;const dt=now-last;last=now;acc+=dt;if(acc>=MOVE_INTERVAL){acc=0;stepPlayer();stepMonster();
+      if(checkCaught()){player.lives--;if(player.lives<=0){statusLabel.textContent='Game Over';running=false;showGameOverOverlay();return;}
+        const s=findTile(2)||{x:1,y:1};player.x=s.x;player.y=s.y;}
+      else if(checkFinish()){statusLabel.textContent='Finished';running=false;showLessonAndPause();}}
+    render();if(running)requestAnimationFrame(tick);}
+
+  startBtn.addEventListener('click',()=>{intro.style.display='none';gameArea.style.display='flex';document.getElementById('mobileControls').style.display='block';
+    player.lives=START_LIVES;setLevel(0);running=true;last=performance.now();acc=0;requestAnimationFrame(tick);});
+  nextBtn.addEventListener('click',()=>{overlay.style.display='none';
+    if(curLevel<levels.length-1){setLevel(curLevel+1);running=true;last=performance.now();acc=0;requestAnimationFrame(tick);}
+    else{overlayTitle.textContent='You finished all levels!';overlayText.textContent='Well done!';overlay.style.display='flex';nextBtn.disabled=true;}});
+  restartBtn.addEventListener('click',()=>{overlay.style.display='none';player.lives=START_LIVES;setLevel(0);running=true;last=performance.now();acc=0;requestAnimationFrame(tick);});
+  setLevel(0);render();
+
+  // 🔹 Mobile touch controls
+  const btnUp=document.getElementById('btnUp'),btnDown=document.getElementById('btnDown'),btnLeft=document.getElementById('btnLeft'),btnRight=document.getElementById('btnRight');
+  function touchPress(dir){if(dir==='up')keys['ArrowUp']=true;if(dir==='down')keys['ArrowDown']=true;if(dir==='left')keys['ArrowLeft']=true;if(dir==='right')keys['ArrowRight']=true;}
+  function touchRelease(){keys['ArrowUp']=keys['ArrowDown']=keys['ArrowLeft']=keys['ArrowRight']=false;}
+  [[btnUp,'up'],[btnDown,'down'],[btnLeft,'left'],[btnRight,'right']].forEach(([el,dir])=>{
+    el.addEventListener('touchstart',e=>{e.preventDefault();touchPress(dir);});
+    el.addEventListener('touchend',e=>{e.preventDefault();touchRelease();});
+  });
+})();
+</script>
+</body>
+</html>
